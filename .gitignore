@@ -1,0 +1,9 @@
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+instance_types.csv
+archive
+*.zip
+*.lock*
+index.html
