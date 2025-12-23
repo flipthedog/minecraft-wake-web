@@ -57,7 +57,7 @@ resource "aws_api_gateway_method" "start_post" {
   resource_id   = aws_api_gateway_resource.start.id
   http_method   = "POST"
   authorization = "NONE"
-  api_key_required = true  # Add this line
+  api_key_required = true
 }
 
 # Enable CORS for OPTIONS method
@@ -153,66 +153,11 @@ resource "aws_api_gateway_deployment" "minecraft_deployment" {
   }
 }
 
-# CloudWatch Log Group for API Gateway
-resource "aws_cloudwatch_log_group" "api_gateway_logs" {
-  name              = "/aws/apigateway/minecraft-server-api"
-  retention_in_days = 7
-}
-
-# IAM role for API Gateway to write to CloudWatch
-resource "aws_iam_role" "api_gateway_cloudwatch" {
-  name = "api-gateway-cloudwatch-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "apigateway.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
-  role       = aws_iam_role.api_gateway_cloudwatch.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
-}
-
-# API Gateway account settings (required once per region)
-resource "aws_api_gateway_account" "main" {
-  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
-
-  depends_on = [
-    aws_iam_role_policy_attachment.api_gateway_cloudwatch
-  ]
-}
-
 # API Gateway Stage
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.minecraft_deployment.id
   rest_api_id   = aws_api_gateway_rest_api.minecraft_api.id
   stage_name    = "prod"
-
-  access_log_settings {
-    destination_arn = aws_cloudwatch_log_group.api_gateway_logs.arn
-    format = jsonencode({
-      requestId      = "$context.requestId"
-      ip             = "$context.identity.sourceIp"
-      requestTime    = "$context.requestTime"
-      httpMethod     = "$context.httpMethod"
-      resourcePath   = "$context.resourcePath"
-      status         = "$context.status"
-      protocol       = "$context.protocol"
-      responseLength = "$context.responseLength"
-      errorMessage   = "$context.error.message"
-    })
-  }
-
-  depends_on = [aws_api_gateway_account.main]
 }
 
 # Method settings for throttling at stage level
