@@ -1,6 +1,7 @@
+// provision an S3 bucket for static website hosting
 
 resource "aws_s3_bucket" "my_bucket" {
-  bucket = var.bucket_name
+  bucket = var.public_bucket_name
 }
 
 resource "aws_s3_bucket_website_configuration" "my_bucket_website" {
@@ -46,7 +47,7 @@ resource "aws_s3_bucket_policy" "my_bucket_policy" {
 
 resource "local_file" "index_html" {
   content = templatefile("${path.module}/index.html.tpl", {
-    api_url = "https://${aws_api_gateway_rest_api.minecraft_api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${aws_api_gateway_stage.prod.stage_name}/start"
+    api_url = "https://${aws_api_gateway_rest_api.minecraft_api.id}.execute-api.${data.aws_region.current.id}.amazonaws.com/${aws_api_gateway_stage.prod.stage_name}/start"
     api_key = aws_api_gateway_api_key.minecraft_key.value
   })
   filename = "${path.module}/index.html"

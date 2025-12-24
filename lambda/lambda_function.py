@@ -26,7 +26,7 @@ def lambda_handler(event, context):
         # Start the instance if it's stopped
         if state == 'stopped':
             ec2.start_instances(InstanceIds=[instance_id])
-            message = f'✅ Starting Minecraft server! Instance was {state}'
+            message = f'✅ Starting Minecraft server! Please give it a minute to start prior to connecting.'
             print(f'Started instance {instance_id}')
         elif state == 'running':
             message = '✅ Minecraft server is already running!'

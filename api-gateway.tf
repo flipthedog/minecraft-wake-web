@@ -38,12 +38,6 @@ resource "aws_api_gateway_usage_plan_key" "main" {
   usage_plan_id = aws_api_gateway_usage_plan.minecraft_usage_plan.id
 }
 
-output "api_key" {
-  value       = aws_api_gateway_api_key.minecraft_key.value
-  description = "API Gateway API Key"
-  sensitive   = true
-}
-
 # API Gateway resource (/start)
 resource "aws_api_gateway_resource" "start" {
   rest_api_id = aws_api_gateway_rest_api.minecraft_api.id
@@ -170,10 +164,4 @@ resource "aws_api_gateway_method_settings" "prod_settings" {
     throttling_rate_limit  = 1
     throttling_burst_limit = 1
   }
-}
-
-# Output the API URL
-output "api_url" {
-  value       = "https://${aws_api_gateway_rest_api.minecraft_api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${aws_api_gateway_stage.prod.stage_name}/start"
-  description = "API Gateway endpoint URL"
 }
