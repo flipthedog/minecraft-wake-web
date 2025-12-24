@@ -111,6 +111,22 @@ resource "aws_iam_role_policy" "mc_allow_ec2_to_s3" {
 EOF
 }
 
+resource "aws_iam_role_policy_attachment" "cloudwatch" {
+  role       = aws_iam_role.allow_s3.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+# Create log groups
+resource "aws_cloudwatch_log_group" "minecraft_server" {
+  name              = "/minecraft/server"
+  retention_in_days = 7
+}
+
+resource "aws_cloudwatch_log_group" "cloud_init" {
+  name              = "/minecraft/cloud-init"
+  retention_in_days = 7
+}
+
 resource "aws_iam_role_policy_attachment" "ssm" {
   role       = aws_iam_role.allow_s3.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -124,7 +140,14 @@ module "ec2_minecraft" {
   ami                  = data.aws_ami.amazon-linux-2.id
   instance_type        = var.instance_type
   iam_instance_profile = aws_iam_instance_profile.mc.id
-  user_data            = file("scripts/minecraft_deploy.sh")
+  user_data = templatefile("scripts/minecraft_deploy.sh", {
+    mc_root_dir        = var.mc_root_dir
+    backup_bucket_name = var.backup_bucket_name
+    minecraft_ram      = var.minecraft_ram
+    backup_frequency   = var.backup_frequency
+    server_properties  = file("${path.module}/config/server.properties")
+    ops_json          = file("${path.module}/config/ops.json")
+})
 
   # network
   subnet_id                   = local.subnet_id

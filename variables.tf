@@ -85,3 +85,9 @@ variable "minecraft_ram" {
   type        = number
   default     = 1300
 }
+
+variable "backup_frequency" {
+  description = "Frequency of backups in minutes"
+  type        = number
+  default     = 15
+}

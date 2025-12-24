@@ -1,49 +1,119 @@
 #!/bin/bash
+set -e
 
-# SOURCE:
-# https://aws.amazon.com/blogs/gametech/setting-up-a-minecraft-java-server-on-amazon-ec2/
+# Variables from Terraform
+MC_ROOT="${mc_root_dir}"
+MC_BUCKET="${backup_bucket_name}"
+JAVA_MX="${minecraft_ram}M"
+JAVA_MS="${minecraft_ram}M"
+BACKUP_FREQ="${backup_frequency}"  # in minutes
+MC_VERSION="latest"
+MINECRAFT_JAR="server.jar"
 
-# *** INSERT SERVER DOWNLOAD URL BELOW ***
-# Do not add any spaces between your link and the "=", otherwise it won't work. EG: MINECRAFTSERVERURL=https://urlexample
+# Install dependencies
+rpm -ivh https://corretto.aws/downloads/latest/amazon-corretto-21-aarch64-linux-jdk.rpm || true
 
-# This is run as a user data script on EC2 instance launch
+yum install -y amazon-cloudwatch-agent jq
 
-MINECRAFTSERVERURL="https://piston-data.mojang.com/v1/objects/64bb6d763bed0a9f1d632ec347938594144943ed/server.jar"
+# Configure CloudWatch Logs agent
+cat > /opt/aws/amazon-cloudwatch-agent/etc/config.json <<CWCONFIG
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/cloud-init-output.log",
+            "log_group_name": "/minecraft/cloud-init",
+            "log_stream_name": "{instance_id}"
+          },
+          {
+            "file_path": "${mc_root_dir}/logs/latest.log",
+            "log_group_name": "/minecraft/server",
+            "log_stream_name": "{instance_id}",
+            "timezone": "UTC"
+          }
+        ]
+      }
+    }
+  }
+}
+CWCONFIG
 
-# Download Java for arm64 architecture
-sudo rpm -ivh https://corretto.aws/downloads/latest/amazon-corretto-21-aarch64-linux-jdk.rpm
-# Install MC Java server in a directory we create
+# Start CloudWatch agent
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config \
+  -m ec2 \
+  -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json
+
+
+# Create minecraft user
 adduser minecraft
-mkdir /opt/minecraft/
-mkdir /opt/minecraft/server/
-cd /opt/minecraft/server
 
-# Download server jar file from Minecraft official website
-sudo wget "https://piston-data.mojang.com/v1/objects/64bb6d763bed0a9f1d632ec347938594144943ed/server.jar"
+# Sync from S3 first
+mkdir -p $MC_ROOT
+aws s3 sync s3://$MC_BUCKET/ $MC_ROOT/
 
-# Generate Minecraft server files and create script
-chown -R minecraft:minecraft /opt/minecraft/
-java -Xmx1300M -Xms1300M -jar server.jar nogui
-sleep 40
-sed -i 's/false/true/p' eula.txt
-touch start
-printf '#!/bin/bash\njava -Xmx1300M -Xms1300M -jar server.jar nogui\n' >> start
-chmod +x start
-sleep 1
-touch stop
-printf '#!/bin/bash\nkill -9 $(ps -ef | pgrep -f "java")' >> stop
-chmod +x stop
-sleep 1
+# Pre-populate server.properties if it doesn't exist
+if [[ ! -f "$MC_ROOT/server.properties" ]]; then
+    cat > $MC_ROOT/server.properties <<PROPS
+${server_properties}
+PROPS
+fi
 
-# Create SystemD Script to run Minecraft server jar on reboot
-cd /etc/systemd/system/
-touch minecraft.service
-printf '[Unit]\nDescription=Minecraft Server on start up\nWants=network-online.target\n[Service]\nUser=minecraft\nWorkingDirectory=/opt/minecraft/server\nExecStart=/opt/minecraft/server/start\nStandardInput=null\n[Install]\nWantedBy=multi-user.target' >> minecraft.service
-sudo systemctl daemon-reload
-sudo systemctl enable minecraft.service
-sudo systemctl start minecraft.service
+# Pre-populate ops.json if it doesn't exist
+if [[ ! -f "$MC_ROOT/ops.json" ]]; then
+    cat > $MC_ROOT/ops.json <<OPS
+${ops_json}
+OPS
+fi
 
-# SSM deployment -- depends on the items created by this script
-# from https://aws.amazon.com/blogs/gametech/cost-optimize-your-minecraft-java-ec2-server/
-wget https://raw.githubusercontent.com/aws-samples/cost-optimize-minecraft-server-on-ec2/refs/heads/main/deployment.sh
-bash deployment.sh
+# Download server if not in S3
+if [[ ! -e "$MC_ROOT/$MINECRAFT_JAR" ]]; then
+    wget -O $MC_ROOT/version_manifest.json https://launchermeta.mojang.com/mc/game/version_manifest.json
+    MC_VERS=$(jq -r '.["latest"]["release"]' $MC_ROOT/version_manifest.json)
+    VERSIONS_URL=$(jq -r '.["versions"][] | select(.id == "'$MC_VERS'") | .url' $MC_ROOT/version_manifest.json)
+    SERVER_URL=$(curl -s $VERSIONS_URL | jq -r '.downloads.server.url')
+    wget -O $MC_ROOT/$MINECRAFT_JAR $SERVER_URL
+fi
+
+# Accept EULA
+cat > $MC_ROOT/eula.txt <<EULA
+eula=true
+EULA
+
+# Create systemd service
+cat > /etc/systemd/system/minecraft.service <<SYSTEMD
+[Unit]
+Description=Minecraft Server
+After=network.target
+
+[Service]
+Type=simple
+User=minecraft
+WorkingDirectory=$MC_ROOT
+ExecStart=/usr/bin/java -Xmx$JAVA_MX -Xms$JAVA_MS -jar $MINECRAFT_JAR nogui
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+
+# S3 sync cron job
+cat > /etc/cron.d/minecraft <<CRON
+SHELL=/bin/bash
+*/$BACKUP_FREQ * * * * minecraft /usr/bin/aws s3 sync $MC_ROOT/ s3://$MC_BUCKET/ --exclude "*.log" && echo "say [Server] World backup completed at $(date '+\%Y-\%m-\%d \%H:\%M:\%S UTC')" > /run/minecraft.stdin
+CRON
+
+# Set ownership
+chown -R minecraft:minecraft $MC_ROOT
+
+# Install monitor script
+wget -O /tmp/deployment.sh https://raw.githubusercontent.com/aws-samples/cost-optimize-minecraft-server-on-ec2/refs/heads/main/deployment.sh
+bash /tmp/deployment.sh
+
+# Start service
+systemctl daemon-reload
+systemctl enable minecraft
+systemctl start minecraft
